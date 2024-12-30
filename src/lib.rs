@@ -626,9 +626,8 @@ impl Build {
         // On MSVC we use `nmake.exe` with a slightly different invocation, so
         // have that take a different path than the standard `make` below.
         if target.contains("msvc") {
-            // nmake build is incredibly slow...
-            let mut build =
-                cc::windows_registry::find(target, "jom.exe").ok_or("failed to find jom")?;
+            // nmake build is incredibly slow... assume jom on path
+            let mut build = Command::new("jom.exe");
             build.arg(format!("/J{}", env::var("NUMBER_OF_PROCESSORS").expect("NUMBER_OF_PROCESSORS to be set")));
             build.arg("build_libs").current_dir(&inner_dir);
             self.run_command(build, "building OpenSSL")?;
@@ -639,8 +638,7 @@ impl Build {
                 write!(f, "dummy file").expect("write dummy file should not fail");
             }
 
-            let mut install =
-                cc::windows_registry::find(target, "nmake.exe").ok_or("failed to find nmake")?;
+            let mut install = Command::new("jom.exe");
             install.arg("install_dev").current_dir(&inner_dir);
             self.run_command(install, "installing OpenSSL")?;
         } else {
