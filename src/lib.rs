@@ -5,6 +5,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::io::Write;
 
 pub fn source_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("openssl")
@@ -183,7 +184,8 @@ impl Build {
         // default locations of the OpenSSL build scripts, or as specified by whatever
         // configured this builder.
         if target.contains("windows") {
-            configure.arg("--openssldir=SYS$MANAGER:[OPENSSL]");
+            // the original 'SYS$MANAGER:[OPENSSL]' fails with unknown escape sequence '\A' error...
+            configure.arg("--openssldir=C:\\OpenSSL");
         } else {
             let openssl_dir = self
                 .openssl_dir
@@ -335,6 +337,7 @@ impl Build {
             "i586-unknown-linux-musl" => "linux-elf",
             "i586-alpine-linux-musl" => "linux-elf",
             "i586-unknown-netbsd" => "BSD-x86-elf",
+            "i586-rust9x-windows-msvc" => "VC-WIN32",
             "i686-apple-darwin" => "darwin-i386-cc",
             "i686-linux-android" => "linux-elf",
             "i686-pc-windows-gnu" => "mingw",
@@ -596,6 +599,26 @@ impl Build {
             }
         }
 
+        if target.contains("i586-rust9x-windows-msvc") {
+            // not enough, also changed in clang-cl wrapper
+            // see https://github.com/openssl/openssl/issues/24595
+            configure.arg("no-sse2");
+
+            // ConvertFiberToThread is Vista and later
+            // (and used in crypto\async\arch\async_win.c)
+            configure.arg("no-async");
+
+            // quic is not needed, and requires 'isnan' and 'isinf' c99 functions
+            configure.arg("no-quic");
+
+            // see openssl/crypto/threads_win
+            configure.arg("-DNO_INTERLOCKEDOR64");
+
+            // make sure Platform SDK enables 'InitializeCriticalSectionAndSpinCount' (winbase.h)
+            configure.arg("-DWINVER=0x0501");
+            configure.arg("-D_WIN32_WINNT=0x0501");
+        }
+
         // And finally, run the perl configure script!
         configure.current_dir(&inner_dir);
         self.run_command(configure, "configuring OpenSSL build")?;
@@ -603,10 +626,18 @@ impl Build {
         // On MSVC we use `nmake.exe` with a slightly different invocation, so
         // have that take a different path than the standard `make` below.
         if target.contains("msvc") {
+            // nmake build is incredibly slow...
             let mut build =
-                cc::windows_registry::find(target, "nmake.exe").ok_or("failed to find nmake")?;
+                cc::windows_registry::find(target, "jom.exe").ok_or("failed to find jom")?;
+            build.arg(format!("/J{}", env::var("NUMBER_OF_PROCESSORS").expect("NUMBER_OF_PROCESSORS to be set")));
             build.arg("build_libs").current_dir(&inner_dir);
             self.run_command(build, "building OpenSSL")?;
+
+            // install step expects it, clang does not seem to create it
+            {
+                let mut f = std::fs::File::create(inner_dir.join("ossl_static.pdb")).expect("Creation of ossl_static.pdb should succeed");
+                write!(f, "dummy file").expect("write dummy file should not fail");
+            }
 
             let mut install =
                 cc::windows_registry::find(target, "nmake.exe").ok_or("failed to find nmake")?;
